@@ -1,5 +1,7 @@
 #!/usr/bin/env sh
-set -euo pipefail
+# use -eu (sh doesn't support -o pipefail)
+set -eu
+
 
 if [ -z "${GCP_SERVICE_ACCOUNT_JSON_BASE64:-}" ]; then
   echo "ERROR: GCP_SERVICE_ACCOUNT_JSON_BASE64 is empty"; exit 1
