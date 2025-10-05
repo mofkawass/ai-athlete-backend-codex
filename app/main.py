@@ -22,7 +22,9 @@ BUCKET = os.environ.get("GCS_BUCKET", "")
 if not BUCKET:
     raise RuntimeError("GCS_BUCKET env var not set")
 
-storage_client = storage.Client()
+creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/app/gcp.json")
+storage_client = storage.Client.from_service_account_json(creds_path)
+
 bucket = storage_client.bucket(BUCKET)
 
 JOBS: Dict[str, Dict[str, Any]] = {}
