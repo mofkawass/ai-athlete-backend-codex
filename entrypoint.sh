@@ -1,15 +1,21 @@
-#!/bin/sh
-set -e
+#!/usr/bin/env sh
+set -euo pipefail
 
-# Accept either base64 or raw JSON in GCP_SERVICE_ACCOUNT_JSON_BASE64
-if [ -n "$GCP_SERVICE_ACCOUNT_JSON_BASE64" ]; then
-  if echo "$GCP_SERVICE_ACCOUNT_JSON_BASE64" | head -c 1 | grep -q "{" ; then
-    printf '%s' "$GCP_SERVICE_ACCOUNT_JSON_BASE64" > /app/gcp.json
-  else
-    CLEAN=$(printf '%s' "$GCP_SERVICE_ACCOUNT_JSON_BASE64" | tr -d '\r\n ')
-    echo "$CLEAN" | base64 -d > /app/gcp.json
-  fi
+if [ -z "${GCP_SERVICE_ACCOUNT_JSON_BASE64:-}" ]; then
+  echo "ERROR: GCP_SERVICE_ACCOUNT_JSON_BASE64 is empty"; exit 1
 fi
 
+VAL="${GCP_SERVICE_ACCOUNT_JSON_BASE64}"
+
+# Write /app/gcp.json from base64 or raw JSON
+case "$VAL" in
+  \{*)  printf "%s" "$VAL" > /app/gcp.json ;;
+  *)    printf "%s" "$VAL" | tr -d '\n\r' | base64 -d > /app/gcp.json ;;
+esac
+
+# Make ADC discoverable to Google libs
+export GOOGLE_APPLICATION_CREDENTIALS=/app/gcp.json
+
 # Start API
-exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}"
+
