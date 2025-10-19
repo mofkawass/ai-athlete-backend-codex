@@ -1,5 +1,5 @@
-fastapi==0.114.1
-uvicorn[standard]==0.30.6
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 google-cloud-storage==2.16.0
 mediapipe==0.10.14
