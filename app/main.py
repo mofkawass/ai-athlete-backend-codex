@@ -1,3 +1,7 @@
+from pydantic import BaseModel
+from .sport_detect import detect_sport_from_gcs
+from .focus_rules import get_focus_recommendations
+
 import os, uuid
 from typing import Dict, Any
 from fastapi import FastAPI, Body, HTTPException, Query, BackgroundTasks
@@ -157,3 +161,21 @@ async function go(){
   if(s.result && s.result.overlay_url){ document.getElementById('v').src = s.result.overlay_url; }
 }
 </script></body></html>"""
+
+# ---------- SPORT DETECTION AND RECOMMENDATIONS ----------
+class DetectSportReq(BaseModel):
+    objectPath: str  # e.g., "uploads/clip123.mp4"
+
+class RecommendReq(BaseModel):
+    sport: str       # e.g., "tennis"
+    focus: str       # e.g., "swing", "footwork", "preparation"
+
+@app.post("/detect-sport")
+def detect_sport(body: DetectSportReq):
+    sport = detect_sport_from_gcs(storage_client, BUCKET, body.objectPath)
+    return {"sport": sport}
+
+@app.post("/recommendations")
+def recommendations(body: RecommendReq):
+    return {"recommendations": get_focus_recommendations(body.sport, body.focus, limit=3)}
+
