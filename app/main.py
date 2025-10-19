@@ -1,3 +1,4 @@
+
 from pydantic import BaseModel
 from .sport_detect import detect_sport_from_gcs
 from .focus_rules import get_focus_recommendations
