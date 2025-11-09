@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
-import os, uuid
+import os, uuid, subprocess  # NEW
 
 from fastapi import FastAPI, Body, HTTPException, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
@@ -121,6 +121,28 @@ def coaching_tips(sport: str) -> Dict[str, Any]:
     }
 
 
+# ---------- NEW: Transcode to a browser-friendly MP4 ----------
+def transcode_to_web_mp4(in_path: str, out_path: str) -> None:
+    """
+    Make sure the result plays & seeks in browsers:
+    - H.264 video (yuv420p)
+    - +faststart to move moov atom to the beginning
+    - (audio disabled here; remove -an if you want to keep audio)
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", in_path,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        out_path,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
 # ---------- Health ----------
 @app.get("/health")
 def health():
@@ -141,21 +163,25 @@ def process_job(job_id: str, object_path: str, provided_sport: Optional[str], pr
         tmp_in = f"/tmp/{job_id}.mp4"
         bucket.blob(object_path).download_to_filename(tmp_in)
 
-        # Overlay and write temp output
-        tmp_out = f"/tmp/{job_id}_overlay.mp4"
-        meta = draw_pose_overlay(tmp_in, tmp_out)
+        # 1) Overlay render
+        tmp_out_raw = f"/tmp/{job_id}_overlay_raw.mp4"
+        meta = draw_pose_overlay(tmp_in, tmp_out_raw)
 
-        # Upload result
+        # 2) Transcode to web-friendly MP4 (NEW)
+        tmp_out_web = f"/tmp/{job_id}_overlay_web.mp4"
+        transcode_to_web_mp4(tmp_out_raw, tmp_out_web)
+
+        # 3) Upload result
         result_gcs = f"results/{job_id}.mp4"
-        bucket.blob(result_gcs).upload_from_filename(tmp_out, content_type="video/mp4")
+        bucket.blob(result_gcs).upload_from_filename(tmp_out_web, content_type="video/mp4")
 
-        # Determine sport (prefer provided → then heuristic → then detection model if you want)
+        # Determine sport (prefer provided → then heuristic)
         sport = provided_sport or simple_auto_sport(meta["width"], meta["height"], meta["fps"])
 
         # Summary+drills (existing)
         generic = coaching_tips(sport)
 
-        # NEW: include focus tips if client provided a focus value
+        # Focus tips (optional)
         focus = (provided_focus or "").strip() or None
         focus_tips = None
         if sport and focus:
@@ -173,8 +199,6 @@ def process_job(job_id: str, object_path: str, provided_sport: Optional[str], pr
             "drills": generic["drills"],
             "overlay_url": gcs_signed_get(result_gcs, minutes=240),
         }
-
-        # Attach focus info if present
         if focus:
             result["focus"] = focus
             result["focus_tips"] = focus_tips
@@ -182,6 +206,12 @@ def process_job(job_id: str, object_path: str, provided_sport: Optional[str], pr
         JOBS[job_id]["status"] = "DONE"
         JOBS[job_id]["result"] = result
 
+    except subprocess.CalledProcessError as e:
+        JOBS[job_id]["status"] = "ERROR"
+        JOBS[job_id]["result"] = {
+            "error": "ffmpeg transcode failed",
+            "stderr": e.stderr.decode(errors="ignore") if e.stderr else "",
+        }
     except Exception as e:
         JOBS[job_id]["status"] = "ERROR"
         JOBS[job_id]["result"] = {"error": str(e)}
