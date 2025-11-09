@@ -217,43 +217,132 @@ def status(job_id: str):
 # ---------- Minimal browser test page ----------
 @app.get("/test", response_class=HTMLResponse)
 def test():
-    return """<!doctype html><html><body style="font-family:sans-serif">
-<h2>AI Athlete – Quick Test (Codex)</h2>
-<label>Focus (optional): 
-<select id="focus">
-  <option value="">(none)</option>
-  <option value="swing">swing</option>
-  <option value="footwork">footwork</option>
-  <option value="preparation">preparation</option>
-</select>
-</label>
-<br><br>
-<input type="file" id="file" accept="video/*">
-<button onclick="go()">Upload & Analyze</button>
-<pre id="log"></pre>
-<video id="v" controls style="max-width:520px"></video>
+    return """<!doctype html><html><head><meta charset="utf-8">
+<title>AI Athlete – Test</title>
+<style>
+  body{font-family:system-ui;margin:24px;max-width:800px}
+  .row{margin:8px 0}
+  .status{padding:8px 12px;border-radius:8px;background:#f5f5f5;white-space:pre-wrap}
+  button{padding:10px 16px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer}
+  button[disabled]{opacity:.6;cursor:not-allowed}
+  .ok{color:#16a34a}
+  .err{color:#dc2626}
+  .muted{color:#666}
+</style>
+</head>
+<body>
+  <h2>AI Athlete – Quick Test</h2>
+  <div class="row">
+    <label>Focus (optional): 
+      <select id="focus">
+        <option value="">(none)</option>
+        <option value="swing">swing</option>
+        <option value="footwork">footwork</option>
+        <option value="preparation">preparation</option>
+      </select>
+    </label>
+  </div>
+  <div class="row">
+    <input type="file" id="file" accept="video/*">
+    <button id="go">Upload & Analyze</button>
+  </div>
+  <div class="row">
+    <div id="status" class="status">Idle.</div>
+  </div>
+  <div class="row">
+    <video id="v" controls style="max-width:100%;display:none"></video>
+  </div>
+  <div class="row">
+    <pre id="out" class="status muted" style="background:#fafafa"></pre>
+  </div>
+
 <script>
 const base = location.origin;
-async function go(){
-  const f = document.getElementById('file').files[0];
-  const focus = document.getElementById('focus').value || null;
-  if(!f){ alert('pick a file'); return; }
-  const r1 = await fetch(`${base}/signed-upload?name=${Date.now()}.mp4&contentType=${f.type||'video/mp4'}`);
-  const {url, objectPath} = await r1.json();
-  await fetch(url, {method:'PUT', body:f, headers:{'Content-Type': f.type||'video/mp4'}});
-  const payload = {objectPath};
-  if (focus) payload.focus = focus;
-  const r2 = await fetch(`${base}/jobs`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-  const {id} = await r2.json();
-  let s={status:'PROCESSING'};
-  while(s.status==='PROCESSING'){
-    await new Promise(t=>setTimeout(t,1500));
-    s = await (await fetch(`${base}/status/`+id)).json();
+const $ = (id) => document.getElementById(id);
+const log = (msg) => { $('status').textContent = msg; };
+const append = (msg) => { $('status').textContent += "\\n" + msg; };
+
+$('go').onclick = async () => {
+  const btn = $('go');
+  const file = $('file').files[0];
+  const focus = $('focus').value || null;
+  $('v').style.display = 'none';
+  $('v').src = '';
+  $('out').textContent = '';
+  if (!file) { log("Please choose a short video (<=10s)."); return; }
+
+  try {
+    btn.disabled = true;
+    log("1/4 Requesting signed upload URL…");
+
+    const name = Date.now() + ".mp4";
+    const ct = file.type || "video/mp4";
+    const s = await fetch(`${base}/signed-upload?name=${encodeURIComponent(name)}&contentType=${encodeURIComponent(ct)}`);
+    if (!s.ok) throw new Error("signed-upload failed: " + s.status);
+    const { url, objectPath } = await s.json();
+    append("✔ Signed URL received.");
+
+    log("2/4 Uploading to GCS…");
+    const put = await fetch(url, { method:'PUT', headers:{'Content-Type': ct}, body: file });
+    if (!put.ok) {
+      const t = await put.text().catch(()=>"(no body)");
+      throw new Error("Upload failed: " + put.status + " " + t);
+    }
+    append("✔ Upload done.");
+
+    log("3/4 Creating processing job…");
+    const payload = { objectPath };
+    if (focus) payload.focus = focus;
+    const create = await fetch(`${base}/jobs`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!create.ok) throw new Error("jobs failed: " + create.status);
+    const { id } = await create.json();
+    append("✔ Job created: " + id);
+
+    log("4/4 Processing video (polling)…");
+    const started = Date.now();
+    const timeoutMs = 120000; // 2 minutes safety timeout
+
+    while (true) {
+      await new Promise(r => setTimeout(r, 1200));
+      const r = await fetch(`${base}/status/` + id);
+      if (!r.ok) throw new Error("status failed: " + r.status);
+      const data = await r.json();
+
+      if (data.status === 'DONE') {
+        append("✔ Processing complete.");
+        $('out').textContent = JSON.stringify(data, null, 2);
+        if (data.result && data.result.overlay_url) {
+          $('v').src = data.result.overlay_url;
+          $('v').style.display = 'block';
+        }
+        log("Done ✅");
+        break;
+      }
+      if (data.status === 'ERROR') {
+        $('out').textContent = JSON.stringify(data, null, 2);
+        log("Error ❌ — see details below.");
+        break;
+      }
+      if (Date.now() - started > timeoutMs) {
+        log("Error ❌ Timed out waiting for processing (2 min).");
+        break;
+      }
+      append("…still processing");
+    }
+  } catch (e) {
+    log("Error ❌ " + (e?.message || e));
+    console.error(e);
+  } finally {
+    $('go').disabled = false;
   }
-  document.getElementById('log').textContent = JSON.stringify(s,null,2);
-  if(s.result && s.result.overlay_url){ document.getElementById('v').src = s.result.overlay_url; }
-}
-</script></body></html>"""
+};
+</script>
+</body></html>"""
+
 
 
 # ---------- SPORT DETECTION AND RECOMMENDATIONS ----------
