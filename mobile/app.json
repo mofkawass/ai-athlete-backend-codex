@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "The AI Athlete",
+    "slug": "the-ai-athlete",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "aiathlete",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow The AI Athlete to use your camera to record sports videos.",
+          "microphonePermission": "Allow The AI Athlete to use your microphone while recording videos.",
+          "recordAudioAndroid": true
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ca.theaiathlete.app"
+    },
+    "android": {
+      "package": "ca.theaiathlete.app"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
