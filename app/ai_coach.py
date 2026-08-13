@@ -1,66 +1,152 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
-def _fallback(metrics: Dict[str, Any], focus: str) -> Dict[str, Any]:
-    priorities = []
-    knee = metrics.get("knee_flexion_min_deg")
-    stance = metrics.get("stance_width_ratio_median")
-    torso = metrics.get("torso_separation_proxy_max_deg")
+def _valid_metrics(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = analysis.get("metrics", {})
+    quality = analysis.get("metric_quality", {})
+    valid = {}
+    for key, value in metrics.items():
+        status = quality.get(key, {}).get("status")
+        if value is not None and status in {"valid", "low_confidence"}:
+            valid[key] = value
+    return valid
 
-    if knee is not None and knee > 155:
-        priorities.append({"title": "Load the legs more", "evidence": f"Minimum knee angle was about {knee}°.", "recommendation": "Create a little more knee flexion before accelerating into the ball.", "drill": "Pause-and-go shadow forehands: 2 x 10."})
-    if torso is not None and torso < 15:
-        priorities.append({"title": "Create more upper-body coil", "evidence": f"Torso separation proxy peaked near {torso}°.", "recommendation": "Turn the shoulders earlier during preparation while staying balanced.", "drill": "Unit-turn checkpoints: 2 x 10 slow repetitions."})
-    if stance is not None and stance < 0.8:
-        priorities.append({"title": "Build a wider base", "evidence": f"Median stance-to-shoulder width ratio was {stance}.", "recommendation": "Use a slightly wider athletic base through preparation and loading.", "drill": "Split-step to forehand stance: 3 x 8."})
+
+def _fallback(analysis: Dict[str, Any], focus: str) -> Dict[str, Any]:
+    metrics = analysis.get("metrics", {})
+    quality = analysis.get("metric_quality", {})
+    priorities: List[Dict[str, str]] = []
+
+    knee = metrics.get("knee_angle_preparation_median_deg")
+    knee_status = quality.get("knee_angle_preparation_median_deg", {}).get("status")
+    stance = metrics.get("stance_width_ratio_preparation_median")
+    stance_status = quality.get("stance_width_ratio_preparation_median", {}).get("status")
+
+    if knee is not None and knee_status == "valid" and knee > 165:
+        priorities.append({
+            "title": "Create a little more leg load",
+            "evidence": f"Preparation knee-angle median was about {knee}°.",
+            "recommendation": "Add a modest athletic knee bend during preparation while staying balanced.",
+            "drill": "Pause-and-go shadow forehands: 2 x 10, holding the loaded position briefly before swinging.",
+        })
+    if stance is not None and stance_status == "valid" and stance < 0.75:
+        priorities.append({
+            "title": "Stabilize the preparation base",
+            "evidence": f"Preparation stance-to-shoulder ratio was about {stance} from a camera view where this measure is usable.",
+            "recommendation": "Experiment with a slightly wider, balanced base during preparation.",
+            "drill": "Split-step to forehand stance: 3 x 8, checking balance before each shadow swing.",
+        })
 
     defaults = [
-        {"title": "Keep the preparation repeatable", "evidence": "Pose tracking was usable, but this MVP has limited camera-depth information.", "recommendation": "Use an early unit turn and arrive balanced before the forward swing.", "drill": "Shadow forehands with a preparation pause: 2 x 10."},
-        {"title": "Accelerate smoothly", "evidence": "Wrist motion is currently measured only as a 2D speed proxy.", "recommendation": "Build racket-head speed progressively rather than forcing the arm early.", "drill": "Three-speed forehands at 50%, 70%, 85%: 5 each."},
-        {"title": "Recover after the finish", "evidence": "The current model tracks body landmarks but not the ball trajectory.", "recommendation": "Finish balanced and recover toward a ready position immediately.", "drill": "Hit-and-recover shadow sequence: 3 x 8."},
+        {
+            "title": "Make the unit turn repeatable",
+            "evidence": "The current build has reliable body pose coverage but does not yet track the ball or racket.",
+            "recommendation": "Prepare early with a coordinated shoulder turn and arrive balanced before the forward swing.",
+            "drill": "Unit-turn checkpoints: 2 x 10 slow shadow forehands with a brief preparation pause.",
+        },
+        {
+            "title": "Build smooth acceleration",
+            "evidence": "Wrist speed is currently a normalized 2D proxy, not racket-head speed.",
+            "recommendation": "Let the swing accelerate progressively rather than forcing the arm from the start.",
+            "drill": "Three-speed forehands at 50%, 70%, and 85% effort: 5 each.",
+        },
+        {
+            "title": "Finish balanced and recover",
+            "evidence": "The model can observe body pose through follow-through, while ball trajectory is not yet measured.",
+            "recommendation": "Complete the follow-through under control and return toward a ready position.",
+            "drill": "Hit-and-recover shadow sequence: 3 x 8.",
+        },
     ]
     for item in defaults:
         if len(priorities) >= 3:
             break
         priorities.append(item)
-    return {"source": "rules", "focus": focus, "strengths": ["Pose tracking produced usable movement data."], "priorities": priorities[:3]}
+
+    return {
+        "source": "rules",
+        "focus": focus,
+        "strengths": ["Pose tracking produced usable movement data."],
+        "priorities": priorities[:3],
+    }
 
 
 def generate_tennis_coaching(analysis: Dict[str, Any], focus: str = "swing") -> Dict[str, Any]:
-    metrics = analysis.get("metrics", {})
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
-        return _fallback(metrics, focus)
+        return _fallback(analysis, focus)
 
     try:
         from openai import OpenAI
+
         client = OpenAI(api_key=api_key)
         schema = {
             "type": "object",
             "properties": {
-                "strengths": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+                "strengths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 2,
+                },
                 "priorities": {
-                    "type": "array", "minItems": 3, "maxItems": 3,
-                    "items": {"type": "object", "properties": {
-                        "title": {"type": "string"}, "evidence": {"type": "string"},
-                        "recommendation": {"type": "string"}, "drill": {"type": "string"}
-                    }, "required": ["title", "evidence", "recommendation", "drill"], "additionalProperties": False}
-                }
-            }, "required": ["strengths", "priorities"], "additionalProperties": False
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "recommendation": {"type": "string"},
+                            "drill": {"type": "string"},
+                        },
+                        "required": ["title", "evidence", "recommendation", "drill"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["strengths", "priorities"],
+            "additionalProperties": False,
         }
+
+        coaching_payload = {
+            "sport": "tennis",
+            "movement": "forehand",
+            "focus": focus,
+            "quality": analysis.get("quality", {}),
+            "metrics": _valid_metrics(analysis),
+            "metric_quality": analysis.get("metric_quality", {}),
+            "phase_proxy": analysis.get("phase_proxy", {}),
+        }
+
+        system_prompt = """You are the coaching reasoning layer for a tennis forehand MVP.
+Use ONLY the supplied measurements as evidence. Never infer ball contact, racket angle, racket-head speed, spin, shot outcome, or true 3D rotation because those are not measured.
+Treat metrics marked low_confidence as descriptive context only; do not turn them into strong corrective claims. Never use metrics marked unavailable.
+Do not compare an uncalibrated speed proxy to an ideal value and do not prescribe a wrist snap. Modern forehand technique varies by grip, stance, hitting arm, and camera view.
+Prefer phase-specific evidence. If the data does not support three genuine faults, return fewer than three priorities rather than inventing faults.
+Strengths must also be supported by measured evidence. Keep recommendations concise, constructive, age-neutral, and tennis-specific."""
+
         response = client.responses.create(
             model=os.getenv("OPENAI_COACH_MODEL", "gpt-5-mini"),
-            input=[{"role": "system", "content": "You are the coaching reasoning layer for a tennis forehand MVP. Use ONLY the supplied 2D pose measurements as evidence. Do not invent ball, racket, contact, spin, or 3D measurements. Be concise, constructive, age-neutral, and prioritize exactly three actionable items."},
-                   {"role": "user", "content": json.dumps({"sport": "tennis", "movement": "forehand", "focus": focus, "analysis": analysis})}],
-            text={"format": {"type": "json_schema", "name": "tennis_coaching", "strict": True, "schema": schema}},
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(coaching_payload)},
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "tennis_coaching",
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
         )
         parsed = json.loads(response.output_text)
         parsed["source"] = "openai"
         parsed["focus"] = focus
         return parsed
     except Exception as exc:
-        result = _fallback(metrics, focus)
+        result = _fallback(analysis, focus)
         result["ai_error"] = str(exc)
         return result
